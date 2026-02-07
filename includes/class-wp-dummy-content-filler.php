@@ -56,6 +56,11 @@ class WP_Dummy_Content_Filler {
         // AJAX handlers
         add_action('wp_ajax_wpdcf_get_post_meta', [$this, 'ajax_get_post_meta']);
         add_action('wp_ajax_wpdcf_get_dummy_posts', [$this, 'ajax_get_dummy_posts']);
+        add_action('wp_ajax_wpdcf_get_authors', [$this, 'ajax_get_authors']);
+        
+        // Cleanup hooks for permanent deletion
+        add_action('before_delete_post', [$this, 'cleanup_post_meta'], 10, 1);
+        add_action('deleted_user', [$this, 'cleanup_user_meta'], 10, 2);
     }
     
     public function enqueue_admin_scripts($hook) {
@@ -133,55 +138,82 @@ class WP_Dummy_Content_Filler {
         );
     }
     
-    public function handle_actions() {
-        if (!current_user_can('manage_options')) {
-            return;
-        }
-        
-        // Generate posts
-        if (isset($_POST['generate_posts']) && wp_verify_nonce($_POST['_wpnonce'], 'generate_dummy_posts')) {
-            $this->generate_dummy_posts();
-        }
-        
-        // Clear dummy posts for specific post type
-        if (isset($_GET['clear_dummy_posts']) && isset($_GET['post_type']) && wp_verify_nonce($_GET['_wpnonce'], 'clear_dummy_posts')) {
-            $post_type = sanitize_text_field($_GET['post_type']);
+
+    /**
+ * Handle form submissions and clear actions
+ */
+public function handle_actions() {
+    if (!current_user_can('manage_options')) {
+        return;
+    }
+
+    // ── 1. Generate dummy posts ─────────────────────────────────────────────
+    if (isset($_POST['generate_posts']) && wp_verify_nonce($_POST['_wpnonce'] ?? '', 'generate_dummy_posts')) {
+        $this->generate_dummy_posts();
+        // Note: generate_dummy_posts() already does redirect + sets transient
+    }
+
+    // ── 2. Clear dummy posts (supports both GET and POST) ────────────────────
+    $clear_posts_nonce_action = 'clear_dummy_posts';
+    if (wp_verify_nonce($_REQUEST['_wpnonce'] ?? '', $clear_posts_nonce_action)) {
+        if (isset($_REQUEST['clear_dummy_posts']) && !empty($_REQUEST['post_type'])) {
+            $post_type = sanitize_key($_REQUEST['post_type']);
+
+            // Basic validation - only allow public post types
+            if (!in_array($post_type, get_post_types(['public' => true]), true)) {
+                set_transient('dummy_content_results', [
+                    'message' => 'Invalid post type selected.',
+                    'type'    => 'error'
+                ], 45);
+                wp_safe_redirect(admin_url('admin.php?page=wp-dummy-content-filler'));
+                exit;
+            }
+
             $deleted_count = $this->clear_dummy_posts($post_type);
-            
+
             set_transient('dummy_content_results', [
                 'message' => sprintf(
-                    'Successfully deleted %d %s.',
+                    'Successfully deleted %d %s (and associated data).',
                     $deleted_count,
-                    _n('post', 'posts', $deleted_count)
-                )
-            ], 30);
-            
-            wp_redirect(add_query_arg(['page' => 'wp-dummy-content-filler'], admin_url('admin.php')));
-            exit;
-        }
-        
-        // Generate users
-        if (isset($_POST['generate_users']) && wp_verify_nonce($_POST['_wpnonce'], 'generate_dummy_users')) {
-            $this->generate_dummy_users();
-        }
-        
-        // Clear dummy users
-        if (isset($_GET['clear_dummy_users']) && wp_verify_nonce($_GET['_wpnonce'], 'clear_dummy_users')) {
-            $deleted_count = $this->clear_dummy_users();
-            
-            set_transient('dummy_user_results', [
-                'message' => sprintf(
-                    'Successfully deleted %d %s.',
-                    $deleted_count,
-                    _n('user', 'users', $deleted_count)
-                )
-            ], 30);
-            
-            wp_redirect(add_query_arg(['page' => 'wp-dummy-content-filler-users'], admin_url('admin.php')));
+                    _n('dummy post', 'dummy posts', $deleted_count)
+                ),
+                'type'    => 'success'
+            ], 45);
+
+            wp_safe_redirect(admin_url('admin.php?page=wp-dummy-content-filler'));
             exit;
         }
     }
-    
+
+    // ── 3. Generate dummy users ─────────────────────────────────────────────
+    if (isset($_POST['generate_users']) && wp_verify_nonce($_POST['_wpnonce'] ?? '', 'generate_dummy_users')) {
+        $this->generate_dummy_users();
+        // Note: generate_dummy_users() already does redirect + sets transient
+    }
+
+    // ── 4. Clear dummy users (usually comes via GET from link) ──────────────
+    $clear_users_nonce_action = 'clear_dummy_users';
+    if (wp_verify_nonce($_REQUEST['_wpnonce'] ?? '', $clear_users_nonce_action)) {
+        if (isset($_REQUEST['clear_dummy_users'])) {
+            $deleted_count = $this->clear_dummy_users();
+
+            set_transient('dummy_user_results', [
+                'message' => sprintf(
+                    'Successfully deleted %d %s (and associated data).',
+                    $deleted_count,
+                    _n('dummy user', 'dummy users', $deleted_count)
+                ),
+                'type'    => 'success'
+            ], 45);
+
+            wp_safe_redirect(admin_url('admin.php?page=wp-dummy-content-filler-users'));
+            exit;
+        }
+    }
+
+    // You can add more actions here in the future (products, settings, etc.)
+}
+
     private function get_faker() {
         if (null === $this->faker) {
             // Check if Faker is available via Composer
@@ -200,6 +232,7 @@ class WP_Dummy_Content_Filler {
         $count = intval($_POST['post_count'] ?? 5);
         $with_images = isset($_POST['with_images']);
         $create_excerpt = isset($_POST['create_excerpt']);
+        $post_author = intval($_POST['post_author'] ?? get_current_user_id());
         
         // Get post meta configurations
         $post_meta_config = [];
@@ -241,7 +274,7 @@ class WP_Dummy_Content_Filler {
         
         // Generate posts
         for ($i = 0; $i < $count; $i++) {
-            $post_id = $this->create_dummy_post($post_type, $with_images, $create_excerpt, $post_meta_config, $created_terms, $taxonomy_config);
+            $post_id = $this->create_dummy_post($post_type, $with_images, $create_excerpt, $post_author, $post_meta_config, $created_terms, $taxonomy_config);
             
             if ($post_id && !is_wp_error($post_id)) {
                 $results['success']++;
@@ -261,19 +294,24 @@ class WP_Dummy_Content_Filler {
             )
         ], 30);
         
-        wp_redirect(add_query_arg(['page' => 'wp-dummy-content-filler'], admin_url('admin.php')));
+        wp_safe_redirect(admin_url('admin.php?page=wp-dummy-content-filler'));
         exit;
     }
     
-    private function create_dummy_post($post_type = 'post', $with_images = false, $create_excerpt = false, $meta_config = [], $created_terms = [], $taxonomy_config = []) {
+    private function create_dummy_post($post_type = 'post', $with_images = false, $create_excerpt = false, $post_author = 0, $meta_config = [], $created_terms = [], $taxonomy_config = []) {
         $faker = $this->get_faker();
+        
+        // Use current user if no author specified or author is invalid
+        if (!$post_author || !get_user_by('id', $post_author)) {
+            $post_author = get_current_user_id();
+        }
         
         $post_data = [
             'post_title'   => $faker ? $faker->sentence(6) : 'Dummy Post ' . time() . ' ' . wp_rand(1000, 9999),
             'post_content' => $faker ? $faker->paragraphs(3, true) : 'This is dummy content for testing purposes.',
             'post_status'  => 'publish',
             'post_type'    => $post_type,
-            'post_author'  => get_current_user_id(),
+            'post_author'  => $post_author,
         ];
         
         // Add excerpt if requested
@@ -540,27 +578,260 @@ class WP_Dummy_Content_Filler {
         return $available_taxonomies;
     }
     
+    /**
+     * Get all available authors for post assignment
+     */
+    private function get_authors() {
+        $authors = get_users([
+            'role__in' => ['administrator', 'editor', 'author'],
+            'orderby' => 'display_name',
+            'order' => 'ASC',
+        ]);
+        
+        $author_list = [];
+        foreach ($authors as $author) {
+            $author_list[$author->ID] = $author->display_name . ' (' . $author->user_login . ')';
+        }
+        
+        return $author_list;
+    }
+    
+    /**
+     * Delete dummy posts and their associated meta data
+     */
     private function clear_dummy_posts($post_type = 'post') {
+        global $wpdb;
+        
         $args = [
             'post_type'      => $post_type,
             'posts_per_page' => -1,
             'meta_key'       => WP_DUMMY_CONTENT_FILLER_META_KEY,
             'meta_value'     => '1',
             'fields'         => 'ids',
+            'post_status'    => 'any', // Include all statuses
         ];
         
         $dummy_posts = get_posts($args);
+        $deleted_count = 0;
         
         foreach ($dummy_posts as $post_id) {
-            wp_delete_post($post_id, true);
+            // Force delete the post (bypass trash)
+            $deleted = wp_delete_post($post_id, true);
+            
+            if ($deleted && !is_wp_error($deleted)) {
+                $deleted_count++;
+            }
         }
         
-        return count($dummy_posts);
+        // Clean up dummy taxonomy terms
+        $this->cleanup_dummy_terms($post_type);
+        
+        return $deleted_count;
+    }
+    
+    /**
+     * Cleanup post meta when a post is deleted
+     * This hook ensures all meta is deleted even if deletion happens outside our plugin
+     */
+    public function cleanup_post_meta($post_id) {
+        global $wpdb;
+        
+        // Check if this is a dummy post
+        $is_dummy = get_post_meta($post_id, WP_DUMMY_CONTENT_FILLER_META_KEY, true);
+        
+        if ($is_dummy === '1') {
+            // Delete all post meta for this post
+            $wpdb->delete(
+                $wpdb->postmeta,
+                ['post_id' => $post_id],
+                ['%d']
+            );
+            
+            // Delete from our tracking if it exists separately
+            delete_post_meta($post_id, WP_DUMMY_CONTENT_FILLER_META_KEY);
+        }
+    }
+    
+    /**
+     * Cleanup orphaned post meta (safety measure)
+     */
+    private function cleanup_orphaned_post_meta() {
+        global $wpdb;
+        
+        // Delete orphaned post meta (posts that don't exist anymore)
+        $wpdb->query("
+            DELETE pm FROM {$wpdb->postmeta} pm
+            LEFT JOIN {$wpdb->posts} p ON p.ID = pm.post_id
+            WHERE p.ID IS NULL
+        ");
+    }
+    
+    /**
+     * Cleanup dummy taxonomy terms for a post type
+     */
+    private function cleanup_dummy_terms($post_type = 'post') {
+        $taxonomies = get_object_taxonomies($post_type);
+        
+        foreach ($taxonomies as $taxonomy) {
+            // Get all terms with our dummy marker
+            $terms = get_terms([
+                'taxonomy'   => $taxonomy,
+                'meta_key'   => WP_DUMMY_CONTENT_FILLER_META_KEY,
+                'meta_value' => '1',
+                'hide_empty' => false,
+                'fields'     => 'ids',
+            ]);
+            
+            if (!is_wp_error($terms) && !empty($terms)) {
+                foreach ($terms as $term_id) {
+                    wp_delete_term($term_id, $taxonomy);
+                }
+            }
+        }
+    }
+    
+    /**
+     * Get all available user meta keys including defaults and custom fields
+     */
+    private function get_user_meta_keys() {
+        global $wpdb;
+        
+        // Default WordPress user fields (from wp_users table)
+        $default_user_fields = [
+            'user_login' => 'Username',
+            'user_email' => 'Email',
+            'user_url' => 'Website',
+            'display_name' => 'Display Name',
+            'description' => 'Biographical Info',
+        ];
+        
+        // Default WordPress user meta fields
+        $default_user_meta = [
+            'nickname' => 'Nickname',
+            'first_name' => 'First Name',
+            'last_name' => 'Last Name',
+            'rich_editing' => 'Visual Editor',
+            'admin_color' => 'Admin Color Scheme',
+            'show_admin_bar_front' => 'Show Toolbar',
+            'locale' => 'Language',
+        ];
+        
+        // WooCommerce fields (if available)
+        $woocommerce_fields = [];
+        if (class_exists('WooCommerce')) {
+            $woocommerce_fields = [
+                'billing_first_name' => 'Billing First Name',
+                'billing_last_name' => 'Billing Last Name',
+                'billing_company' => 'Billing Company',
+                'billing_address_1' => 'Billing Address 1',
+                'billing_address_2' => 'Billing Address 2',
+                'billing_city' => 'Billing City',
+                'billing_postcode' => 'Billing Postcode',
+                'billing_country' => 'Billing Country',
+                'billing_state' => 'Billing State',
+                'billing_phone' => 'Billing Phone',
+                'billing_email' => 'Billing Email',
+                'shipping_first_name' => 'Shipping First Name',
+                'shipping_last_name' => 'Shipping Last Name',
+                'shipping_company' => 'Shipping Company',
+                'shipping_address_1' => 'Shipping Address 1',
+                'shipping_address_2' => 'Shipping Address 2',
+                'shipping_city' => 'Shipping City',
+                'shipping_postcode' => 'Shipping Postcode',
+                'shipping_country' => 'Shipping Country',
+                'shipping_state' => 'Shipping State',
+            ];
+        }
+        
+        // Get custom user meta keys from ACF
+        $acf_fields = [];
+        if (function_exists('acf_get_field_groups')) {
+            $field_groups = acf_get_field_groups(['user_role' => 'all']);
+            foreach ($field_groups as $field_group) {
+                $fields = acf_get_fields($field_group['key']);
+                if ($fields) {
+                    foreach ($fields as $field) {
+                        if (isset($field['name']) && $field['name']) {
+                            $acf_fields[$field['name']] = $field['label'] ?? $field['name'];
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Get custom user meta keys from CMB2
+        $cmb2_fields = [];
+        if (class_exists('CMB2')) {
+            $cmb2_boxes = CMB2_Boxes::get_all();
+            foreach ($cmb2_boxes as $cmb_id => $cmb) {
+                $object_types = $cmb->prop('object_types');
+                if ($object_types && in_array('user', (array)$object_types)) {
+                    $fields = $cmb->prop('fields');
+                    if ($fields) {
+                        foreach ($fields as $field) {
+                            if (isset($field['id'])) {
+                                $cmb2_fields[$field['id']] = $field['name'] ?? $field['id'];
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Get other custom user meta keys from database (excluding hidden ones)
+        $custom_meta_keys = $wpdb->get_col("
+            SELECT DISTINCT meta_key 
+            FROM {$wpdb->usermeta} 
+            WHERE meta_key NOT LIKE '\_%' 
+            AND meta_key NOT IN (
+                'nickname', 'first_name', 'last_name', 'description', 'rich_editing', 
+                'comment_shortcuts', 'admin_color', 'use_ssl', 'show_admin_bar_front', 
+                'locale', 'wp_capabilities', 'wp_user_level', 'dismissed_wp_pointers',
+                'session_tokens', 'billing_%', 'shipping_%', 'last_update'
+            )
+            ORDER BY meta_key
+            LIMIT 100
+        ");
+        
+        // Format custom meta keys
+        foreach ($custom_meta_keys as $key) {
+            if (!isset($default_user_meta[$key]) && !isset($acf_fields[$key]) && !isset($cmb2_fields[$key])) {
+                $label = ucwords(str_replace(['_', '-'], ' ', $key));
+                $default_user_meta[$key] = $label;
+            }
+        }
+        
+        // Merge all fields
+        $all_fields = array_merge(
+            $default_user_fields,
+            $default_user_meta,
+            $woocommerce_fields,
+            $acf_fields,
+            $cmb2_fields
+        );
+        
+        // Remove duplicates and sort alphabetically
+        $all_fields = array_unique($all_fields);
+        asort($all_fields);
+        
+        return $all_fields;
     }
     
     private function generate_dummy_users() {
         $count = intval($_POST['user_count'] ?? 5);
         $role = sanitize_text_field($_POST['user_role'] ?? 'subscriber');
+        
+        // Get user meta configurations
+        $user_meta_config = [];
+        if (isset($_POST['user_meta']) && is_array($_POST['user_meta'])) {
+            foreach ($_POST['user_meta'] as $meta_key => $config) {
+                if (!empty($config['type'])) {
+                    $user_meta_config[$meta_key] = [
+                        'type' => sanitize_text_field($config['type'])
+                    ];
+                }
+            }
+        }
         
         $results = ['success' => 0, 'failed' => 0];
         $faker = $this->get_faker();
@@ -569,20 +840,55 @@ class WP_Dummy_Content_Filler {
             $username = $faker ? $faker->userName : 'dummyuser_' . uniqid();
             $email = $faker ? $faker->email : $username . '@example.com';
             
-            $user_id = wp_create_user($username, 'password', $email);
+            // Create user with basic data
+            $userdata = [
+                'user_login' => $username,
+                'user_email' => $email,
+                'user_pass'  => 'password',
+                'role'       => $role,
+            ];
+            
+            // Add optional user fields if configured
+            foreach ($user_meta_config as $meta_key => $config) {
+                $meta_value = $this->generate_faker_value($config['type']);
+                if ($meta_value !== '') {
+                    // Handle user table fields specially
+                    if (in_array($meta_key, ['user_url', 'display_name', 'description'])) {
+                        $userdata[$meta_key] = $meta_value;
+                    }
+                }
+            }
+            
+            $user_id = wp_insert_user($userdata);
             
             if (!is_wp_error($user_id)) {
-                $user = new WP_User($user_id);
-                $user->set_role($role);
-                
                 // Add our meta key
                 update_user_meta($user_id, WP_DUMMY_CONTENT_FILLER_META_KEY, '1');
                 
-                // Add some dummy user meta
+                // Always add first name and last name
                 if ($faker) {
-                    update_user_meta($user_id, 'first_name', $faker->firstName);
-                    update_user_meta($user_id, 'last_name', $faker->lastName);
-                    update_user_meta($user_id, 'description', $faker->paragraph());
+                    $first_name = $faker->firstName;
+                    $last_name = $faker->lastName;
+                    
+                    update_user_meta($user_id, 'first_name', $first_name);
+                    update_user_meta($user_id, 'last_name', $last_name);
+                    
+                    // Set display name if not already set
+                    if (!isset($userdata['display_name'])) {
+                        $display_name = $faker->boolean(70) ? "$first_name $last_name" : $username;
+                        wp_update_user([
+                            'ID' => $user_id,
+                            'display_name' => $display_name
+                        ]);
+                    }
+                }
+                
+                // Add configured user meta
+                foreach ($user_meta_config as $meta_key => $config) {
+                    $meta_value = $this->generate_faker_value($config['type']);
+                    if ($meta_value !== '' && !in_array($meta_key, ['user_url', 'display_name', 'description'])) {
+                        update_user_meta($user_id, $meta_key, $meta_value);
+                    }
                 }
                 
                 $results['success']++;
@@ -600,11 +906,16 @@ class WP_Dummy_Content_Filler {
             )
         ], 30);
         
-        wp_redirect(add_query_arg(['page' => 'wp-dummy-content-filler-users'], admin_url('admin.php')));
+        wp_safe_redirect(admin_url('admin.php?page=wp-dummy-content-filler-users'));
         exit;
     }
     
+    /**
+     * Delete dummy users and their associated meta data
+     */
     private function clear_dummy_users() {
+        global $wpdb;
+        
         $args = [
             'meta_key'   => WP_DUMMY_CONTENT_FILLER_META_KEY,
             'meta_value' => '1',
@@ -612,14 +923,58 @@ class WP_Dummy_Content_Filler {
         ];
         
         $dummy_users = get_users($args);
+        $deleted_count = 0;
         
         foreach ($dummy_users as $user_id) {
             if ($user_id != 1) { // Don't delete admin user
-                wp_delete_user($user_id);
+                // Delete the user (this should trigger our cleanup hook)
+                if (wp_delete_user($user_id)) {
+                    $deleted_count++;
+                }
             }
         }
         
-        return count($dummy_users);
+        // Additional cleanup: Delete orphaned user meta
+        $this->cleanup_orphaned_user_meta();
+        
+        return $deleted_count;
+    }
+    
+    /**
+     * Cleanup user meta when a user is deleted
+     * This hook ensures all meta is deleted even if deletion happens outside our plugin
+     */
+    public function cleanup_user_meta($user_id, $reassign = null) {
+        global $wpdb;
+        
+        // Check if this is a dummy user
+        $is_dummy = get_user_meta($user_id, WP_DUMMY_CONTENT_FILLER_META_KEY, true);
+        
+        if ($is_dummy === '1') {
+            // Delete all user meta for this user
+            $wpdb->delete(
+                $wpdb->usermeta,
+                ['user_id' => $user_id],
+                ['%d']
+            );
+            
+            // Delete from our tracking if it exists separately
+            delete_user_meta($user_id, WP_DUMMY_CONTENT_FILLER_META_KEY);
+        }
+    }
+    
+    /**
+     * Cleanup orphaned user meta (safety measure)
+     */
+    private function cleanup_orphaned_user_meta() {
+        global $wpdb;
+        
+        // Delete orphaned user meta (users that don't exist anymore)
+        $wpdb->query("
+            DELETE um FROM {$wpdb->usermeta} um
+            LEFT JOIN {$wpdb->users} u ON u.ID = um.user_id
+            WHERE u.ID IS NULL
+        ");
     }
     
     public function ajax_get_post_meta() {
@@ -636,6 +991,15 @@ class WP_Dummy_Content_Filler {
         <div class="post-meta-section">
             <h3>Post Content Options</h3>
             <table class="form-table">
+                <tr>
+                    <th scope="row">Post Author</th>
+                    <td>
+                        <select name="post_author" id="post-author-selector">
+                            <option value="0">Select User</option>
+                        </select>
+                        <span class="description">Select who will be the author of generated posts</span>
+                    </td>
+                </tr>
                 <tr>
                     <th scope="row">Post Excerpt</th>
                     <td>
@@ -730,8 +1094,39 @@ class WP_Dummy_Content_Filler {
             <p class="description">No custom fields from ACF, CMB2, or similar plugins found for this post type.</p>
             <?php endif; ?>
         </div>
+        <script>
+        jQuery(document).ready(function($) {
+            // Load authors for post author selection
+            $.ajax({
+                url: wpdcf_ajax.ajax_url,
+                type: 'POST',
+                data: {
+                    action: 'wpdcf_get_authors',
+                    nonce: wpdcf_ajax.nonce
+                },
+                success: function(response) {
+                    if (response.success) {
+                        var authors = response.data;
+                        var select = $('#post-author-selector');
+                        $.each(authors, function(id, name) {
+                            select.append('<option value="' + id + '">' + name + '</option>');
+                        });
+                    }
+                }
+            });
+        });
+        </script>
         <?php
         wp_send_json_success(ob_get_clean());
+    }
+    
+    public function ajax_get_authors() {
+        if (!current_user_can('manage_options') || !wp_verify_nonce($_POST['nonce'], 'wpdcf_ajax_nonce')) {
+            wp_die('Unauthorized');
+        }
+        
+        $authors = $this->get_authors();
+        wp_send_json_success($authors);
     }
     
     public function ajax_get_dummy_posts() {
@@ -785,9 +1180,6 @@ class WP_Dummy_Content_Filler {
                         <td><?php echo esc_html($post->ID); ?></td>
                         <td>
                             <strong><?php echo esc_html($post->post_title); ?></strong>
-                            <?php if (has_post_thumbnail($post->ID)): ?>
-                                <span class="dashicons dashicons-format-image" title="Has featured image"></span>
-                            <?php endif; ?>
                         </td>
                         <td><?php echo esc_html(get_post_type_object($post->post_type)->labels->singular_name); ?></td>
                         <td>
@@ -801,7 +1193,7 @@ class WP_Dummy_Content_Filler {
                         <td>
                             <a href="<?php echo esc_url(get_edit_post_link($post->ID)); ?>" class="button button-small">Edit</a>
                             <a href="<?php echo esc_url(get_permalink($post->ID)); ?>" class="button button-small" target="_blank">View</a>
-                            <a href="<?php echo esc_url(admin_url('post.php?action=delete&amp;post=' . $post->ID . '&amp;_wpnonce=' . wp_create_nonce('delete-post_' . $post->ID))); ?>" class="button button-small button-danger" onclick="return confirm('Are you sure?')">Delete</a>
+                            <a href="<?php echo esc_url(admin_url('post.php?action=delete&amp;post=' . $post->ID . '&amp;_wpnonce=' . wp_create_nonce('delete-post_' . $post->ID))); ?>" class="button button-small button-danger" onclick="return confirm('Are you sure? This will delete the post and all its meta data.')">Delete</a>
                         </td>
                     </tr>
                 <?php endforeach; ?>
@@ -835,9 +1227,11 @@ class WP_Dummy_Content_Filler {
                             <td>
                                 <select name="post_type" id="post-type-selector">
                                     <?php foreach ($post_types as $type): ?>
+                                        <?php if ($type->name !== 'attachment'): // Exclude media post type ?>
                                         <option value="<?php echo esc_attr($type->name); ?>" <?php selected($selected_post_type, $type->name); ?>>
                                             <?php echo esc_html($type->label); ?>
                                         </option>
+                                        <?php endif; ?>
                                     <?php endforeach; ?>
                                 </select>
                             </td>
@@ -872,9 +1266,11 @@ class WP_Dummy_Content_Filler {
                                     <select name="filter_post_type" id="filter-post-type">
                                         <option value="">All Post Types</option>
                                         <?php foreach ($post_types as $type): ?>
+                                            <?php if ($type->name !== 'attachment'): // Exclude media post type ?>
                                             <option value="<?php echo esc_attr($type->name); ?>">
                                                 <?php echo esc_html($type->label); ?>
                                             </option>
+                                            <?php endif; ?>
                                         <?php endforeach; ?>
                                     </select>
                                     <button type="button" id="apply-filter" class="button">Apply Filter</button>
@@ -888,31 +1284,45 @@ class WP_Dummy_Content_Filler {
                     <p>Select a post type and click "Apply Filter" to see dummy posts.</p>
                 </div>
                 
-                <div id="delete-section" style="display:none;">
-                    <h4>Delete Dummy Posts</h4>
-                    <form method="get" action="">
-                        <input type="hidden" name="page" value="wp-dummy-content-filler">
-                        <input type="hidden" name="_wpnonce" value="<?php echo wp_create_nonce('clear_dummy_posts'); ?>">
+                <div id="delete-section" style="display:none; margin-top: 30px; padding: 20px; background: #fff5f5; border: 1px solid #ffb3b3; border-radius: 6px;">
+                    <h4 style="color:#d63638; margin-top:0;">Delete Dummy Posts</h4>
+                    <p class="description"><strong>Warning:</strong> This will <strong>permanently</strong> delete ALL dummy posts of the selected post type (including meta, terms, featured images, etc.). This cannot be undone.</p>
+
+                    <form method="post" action="">
+                        <?php wp_nonce_field('clear_dummy_posts', '_wpnonce'); ?>
                         <input type="hidden" name="clear_dummy_posts" value="1">
+
                         <p>
-                            <select name="post_type" id="delete-post-type" required>
-                                <option value="">Select post type to delete</option>
+                            <label for="delete-post-type"><strong>Select post type to clean:</strong></label><br>
+                            <select name="post_type" id="delete-post-type" required style="min-width:240px;">
+                                <option value="">— Select post type —</option>
                                 <?php foreach ($post_types as $type): ?>
+                                    <?php if ($type->name !== 'attachment'): ?>
                                     <option value="<?php echo esc_attr($type->name); ?>">
-                                        <?php echo esc_html($type->label); ?>
+                                        <?php echo esc_html($type->label); ?>  (<?php echo esc_html($type->name); ?>)
                                     </option>
+                                    <?php endif; ?>
                                 <?php endforeach; ?>
                             </select>
-                            <button type="submit" class="button button-danger" onclick="return confirm('Are you sure? This will delete ALL dummy posts of selected type.')">Delete All Dummy Posts</button>
+                        </p>
+
+                        <p style="margin-top:20px;">
+                            <input type="submit" 
+                                class="button button-large button-link-delete" 
+                                value="Delete All Dummy Posts"
+                                onclick="return confirm('FINAL WARNING!\n\nThis will PERMANENTLY DELETE all dummy content for the selected post type.\nNo backup. No trash. Really sure?');">
                         </p>
                     </form>
                 </div>
+
+
             </div>
         </div>
         <?php
     }
     
     public function render_users_page() {
+        $user_meta_keys = $this->get_user_meta_keys();
         ?>
         <div class="wrap wp-dummy-content-filler">
             <h1>Dummy Content Filler - Users</h1>
@@ -931,7 +1341,7 @@ class WP_Dummy_Content_Filler {
             </h2>
             
             <div id="generate-users-tab" class="tab-content active">
-                <form method="post" action="">
+                <form method="post" action="" id="generate-users-form">
                     <?php wp_nonce_field('generate_dummy_users'); ?>
                     <table class="form-table">
                         <tr>
@@ -954,6 +1364,70 @@ class WP_Dummy_Content_Filler {
                             </td>
                         </tr>
                     </table>
+                    
+                    <div id="user-meta-configuration">
+                        <h3>User Information</h3>
+                        <p class="description">Configure how each user field should be filled:</p>
+                        <table class="widefat">
+                            <thead>
+                                <tr>
+                                    <th>Field Name</th>
+                                    <th>Field Key</th>
+                                    <th>Faker Data Type</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php foreach ($user_meta_keys as $meta_key => $field_label): ?>
+                                    <tr>
+                                        <td>
+                                            <strong><?php echo esc_html($field_label); ?></strong>
+                                        </td>
+                                        <td>
+                                            <code><?php echo esc_html($meta_key); ?></code>
+                                            <input type="hidden" name="user_meta[<?php echo esc_attr($meta_key); ?>][key]" value="<?php echo esc_attr($meta_key); ?>">
+                                        </td>
+                                        <td>
+                                            <select name="user_meta[<?php echo esc_attr($meta_key); ?>][type]">
+                                                <option value="">-- Leave Empty --</option>
+                                                <?php foreach ($this->faker_types as $type_value => $type_label): 
+                                                    // Auto-select appropriate type based on field name
+                                                    $selected = '';
+                                                    if (strpos($meta_key, 'email') !== false && $type_value === 'email') {
+                                                        $selected = 'selected';
+                                                    } elseif (strpos($meta_key, 'phone') !== false && $type_value === 'phone') {
+                                                        $selected = 'selected';
+                                                    } elseif (strpos($meta_key, 'address') !== false && $type_value === 'address') {
+                                                        $selected = 'selected';
+                                                    } elseif (strpos($meta_key, 'city') !== false && $type_value === 'city') {
+                                                        $selected = 'selected';
+                                                    } elseif (strpos($meta_key, 'country') !== false && $type_value === 'country') {
+                                                        $selected = 'selected';
+                                                    } elseif (strpos($meta_key, 'zip') !== false && $type_value === 'zipcode') {
+                                                        $selected = 'selected';
+                                                    } elseif (strpos($meta_key, 'postcode') !== false && $type_value === 'zipcode') {
+                                                        $selected = 'selected';
+                                                    } elseif (strpos($meta_key, 'company') !== false && $type_value === 'company') {
+                                                        $selected = 'selected';
+                                                    } elseif ($meta_key === 'user_url' && $type_value === 'url') {
+                                                        $selected = 'selected';
+                                                    } elseif ($meta_key === 'description' && $type_value === 'paragraphs') {
+                                                        $selected = 'selected';
+                                                    } elseif (strpos($meta_key, 'name') !== false && $type_value === 'name') {
+                                                        $selected = 'selected';
+                                                    }
+                                                ?>
+                                                    <option value="<?php echo esc_attr($type_value); ?>" <?php echo $selected; ?>>
+                                                        <?php echo esc_html($type_label); ?>
+                                                    </option>
+                                                <?php endforeach; ?>
+                                            </select>
+                                        </td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                    
                     <p class="submit">
                         <input type="submit" name="generate_users" class="button button-primary" value="Generate Users">
                     </p>
@@ -986,7 +1460,7 @@ class WP_Dummy_Content_Filler {
                         echo '<td>' . esc_html($full_name ?: 'N/A') . '</td>';
                         echo '<td>' . esc_html(implode(', ', $user->roles)) . '</td>';
                         echo '<td>';
-                        echo '<a href="' . esc_url(admin_url('user-edit.php?user_id=' . $user->ID)) . '" class="button button-small">Edit</a> ';
+                        // Removed Edit button, keeping only View Profile
                         echo '<a href="' . esc_url(admin_url('profile.php?user_id=' . $user->ID)) . '" class="button button-small" target="_blank">View Profile</a>';
                         echo '</td>';
                         echo '</tr>';
@@ -995,11 +1469,14 @@ class WP_Dummy_Content_Filler {
                     echo '</tbody></table>';
                     
                     $nonce = wp_create_nonce('clear_dummy_users');
-                    echo '<p style="margin-top: 20px;"><a href="' . esc_url(add_query_arg([
+                    echo '<div style="margin-top: 20px; padding: 15px; background: #fff3cd; border: 1px solid #ffeaa7; border-radius: 4px;">';
+                    echo '<p><strong>Warning:</strong> This will permanently delete ALL dummy users (except admin) along with their meta data.</p>';
+                    echo '<p><a href="' . esc_url(add_query_arg([
                         'page' => 'wp-dummy-content-filler-users',
                         'clear_dummy_users' => '1',
                         '_wpnonce' => $nonce
-                    ], admin_url('admin.php'))) . '" class="button button-danger" onclick="return confirm(\'Are you sure? This will delete ALL dummy users except admin.\')">Delete All Dummy Users</a></p>';
+                    ], admin_url('admin.php'))) . '" class="button button-danger" onclick="return confirm(\'WARNING: This will PERMANENTLY delete ALL dummy users (except admin) along with their meta data. This action cannot be undone. Are you sure?\')">Delete All Dummy Users</a></p>';
+                    echo '</div>';
                 } else {
                     echo '<p>No dummy users found.</p>';
                 }

@@ -23,34 +23,34 @@
     border-color: #b32d2e !important;
 }
 
-#post-meta-configuration {
+#post-meta-configuration, #user-meta-configuration {
     margin: 20px 0;
 }
 
-#post-meta-configuration table {
+#post-meta-configuration table, #user-meta-configuration table {
     margin-top: 10px;
     border-collapse: collapse;
 }
 
-#post-meta-configuration th {
+#post-meta-configuration th, #user-meta-configuration th {
     font-weight: 600;
     background: #f6f7f7;
     padding: 10px;
 }
 
-#post-meta-configuration td {
+#post-meta-configuration td, #user-meta-configuration td {
     padding: 10px;
     vertical-align: middle;
     border-bottom: 1px solid #f0f0f0;
 }
 
-#post-meta-configuration h3 {
+#post-meta-configuration h3, #user-meta-configuration h3 {
     margin-top: 30px;
     padding-bottom: 10px;
     border-bottom: 2px solid #f0f0f0;
 }
 
-#post-meta-configuration h3:first-child {
+#post-meta-configuration h3:first-child, #user-meta-configuration h3:first-child {
     margin-top: 0;
 }
 
@@ -113,4 +113,21 @@ code {
     font-style: italic;
     color: #666;
     margin: 5px 0 15px 0;
+}
+
+.widefat th, .widefat td {
+    vertical-align: middle;
+}
+
+.widefat select {
+    width: 100%;
+    max-width: 200px;
+}
+
+.form-table select {
+    min-width: 200px;
+}
+
+.notice {
+    margin: 20px 0 0 0;
 }

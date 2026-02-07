@@ -102,4 +102,16 @@ jQuery(document).ready(function($) {
     if ($('#manage-tab').hasClass('active')) {
         loadDummyPosts();
     }
+    
+    // Add confirmation for individual post deletion
+    $(document).on('click', '.button-danger', function(e) {
+        if ($(this).text().indexOf('Delete') !== -1 && !$(this).hasClass('confirmed')) {
+            e.preventDefault();
+            var href = $(this).attr('href');
+            if (confirm('Are you sure? This will delete the post and all its meta data.')) {
+                $(this).addClass('confirmed');
+                window.location.href = href;
+            }
+        }
+    });
 });
