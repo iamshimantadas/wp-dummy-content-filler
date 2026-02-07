@@ -108,3 +108,9 @@ code {
     border-radius: 3px;
     font-size: 0.9em;
 }
+
+.description {
+    font-style: italic;
+    color: #666;
+    margin: 5px 0 15px 0;
+}

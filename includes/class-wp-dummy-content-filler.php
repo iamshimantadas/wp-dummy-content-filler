@@ -199,7 +199,7 @@ class WP_Dummy_Content_Filler {
         $post_type = sanitize_text_field($_POST['post_type'] ?? 'post');
         $count = intval($_POST['post_count'] ?? 5);
         $with_images = isset($_POST['with_images']);
-        $create_taxonomies = isset($_POST['create_taxonomies']);
+        $create_excerpt = isset($_POST['create_excerpt']);
         
         // Get post meta configurations
         $post_meta_config = [];
@@ -207,8 +207,7 @@ class WP_Dummy_Content_Filler {
             foreach ($_POST['post_meta'] as $meta_key => $config) {
                 if (!empty($config['type'])) {
                     $post_meta_config[$meta_key] = [
-                        'type' => sanitize_text_field($config['type']),
-                        'value' => isset($config['value']) ? sanitize_text_field($config['value']) : ''
+                        'type' => sanitize_text_field($config['type'])
                     ];
                 }
             }
@@ -221,7 +220,6 @@ class WP_Dummy_Content_Filler {
                 if (isset($config['create']) && $config['create'] === 'yes') {
                     $taxonomy_config[$taxonomy] = [
                         'create' => 'yes',
-                        'count' => isset($config['count']) ? intval($config['count']) : 3,
                         'assign' => isset($config['assign']) ? intval($config['assign']) : 2
                     ];
                 }
@@ -232,9 +230,10 @@ class WP_Dummy_Content_Filler {
         
         // First create taxonomies if requested
         $created_terms = [];
-        if ($create_taxonomies && !empty($taxonomy_config)) {
+        if (!empty($taxonomy_config)) {
             foreach ($taxonomy_config as $taxonomy => $config) {
-                $terms = $this->create_dummy_terms($taxonomy, $config['count']);
+                // Always create 10 terms for each taxonomy that has create enabled
+                $terms = $this->create_dummy_terms($taxonomy, 10); // Always create 10 terms
                 $created_terms[$taxonomy] = $terms;
                 $results['taxonomies_created'] += count($terms);
             }
@@ -242,7 +241,7 @@ class WP_Dummy_Content_Filler {
         
         // Generate posts
         for ($i = 0; $i < $count; $i++) {
-            $post_id = $this->create_dummy_post($post_type, $with_images, $post_meta_config, $created_terms, $taxonomy_config);
+            $post_id = $this->create_dummy_post($post_type, $with_images, $create_excerpt, $post_meta_config, $created_terms, $taxonomy_config);
             
             if ($post_id && !is_wp_error($post_id)) {
                 $results['success']++;
@@ -266,17 +265,21 @@ class WP_Dummy_Content_Filler {
         exit;
     }
     
-    private function create_dummy_post($post_type = 'post', $with_images = false, $meta_config = [], $created_terms = [], $taxonomy_config = []) {
+    private function create_dummy_post($post_type = 'post', $with_images = false, $create_excerpt = false, $meta_config = [], $created_terms = [], $taxonomy_config = []) {
         $faker = $this->get_faker();
         
         $post_data = [
             'post_title'   => $faker ? $faker->sentence(6) : 'Dummy Post ' . time() . ' ' . wp_rand(1000, 9999),
             'post_content' => $faker ? $faker->paragraphs(3, true) : 'This is dummy content for testing purposes.',
-            'post_excerpt' => $faker ? $faker->paragraph() : 'This is a dummy excerpt.',
             'post_status'  => 'publish',
             'post_type'    => $post_type,
             'post_author'  => get_current_user_id(),
         ];
+        
+        // Add excerpt if requested
+        if ($create_excerpt) {
+            $post_data['post_excerpt'] = $faker ? $faker->paragraph() : 'This is a dummy excerpt.';
+        }
         
         $post_id = wp_insert_post($post_data);
         
@@ -292,22 +295,25 @@ class WP_Dummy_Content_Filler {
             // Assign taxonomies
             if (!empty($created_terms)) {
                 foreach ($created_terms as $taxonomy => $terms) {
-                    if (!empty($terms)) {
-                        $assign_count = isset($taxonomy_config[$taxonomy]['assign']) ? 
-                                       $taxonomy_config[$taxonomy]['assign'] : 2;
+                    if (!empty($terms) && isset($taxonomy_config[$taxonomy]['assign'])) {
+                        $assign_count = $taxonomy_config[$taxonomy]['assign'];
                         $assign_count = min($assign_count, count($terms));
-                        $selected_terms = array_rand(array_flip($terms), $assign_count);
-                        if (!is_array($selected_terms)) {
-                            $selected_terms = [$selected_terms];
+                        
+                        // Randomly select terms to assign
+                        $shuffled_terms = $terms;
+                        shuffle($shuffled_terms);
+                        $selected_terms = array_slice($shuffled_terms, 0, $assign_count);
+                        
+                        if (!empty($selected_terms)) {
+                            wp_set_post_terms($post_id, $selected_terms, $taxonomy);
                         }
-                        wp_set_post_terms($post_id, $selected_terms, $taxonomy);
                     }
                 }
             }
             
             // Add configured post meta
             foreach ($meta_config as $meta_key => $config) {
-                $meta_value = $this->generate_faker_value($config['type'], $config['value']);
+                $meta_value = $this->generate_faker_value($config['type']);
                 if ($meta_value !== '') {
                     update_post_meta($post_id, $meta_key, $meta_value);
                 }
@@ -317,12 +323,46 @@ class WP_Dummy_Content_Filler {
         return $post_id;
     }
     
-    private function create_dummy_terms($taxonomy, $count = 3) {
+    private function create_dummy_terms($taxonomy, $count = 10) {
         $faker = $this->get_faker();
         $created_terms = [];
         
-        for ($i = 0; $i < $count; $i++) {
-            $term_name = $faker ? $faker->words(2, true) : 'Term ' . ($i + 1);
+        // Get existing terms to avoid duplicates
+        $existing_terms = get_terms([
+            'taxonomy' => $taxonomy,
+            'hide_empty' => false,
+            'fields' => 'names'
+        ]);
+        
+        if (is_wp_error($existing_terms)) {
+            $existing_terms = [];
+        }
+        
+        $created = 0;
+        $attempts = 0;
+        $max_attempts = $count * 3; // Prevent infinite loop
+        
+        while ($created < $count && $attempts < $max_attempts) {
+            $attempts++;
+            
+            if ($faker) {
+                // For category-like taxonomies, use appropriate words
+                if ($taxonomy === 'category') {
+                    $term_name = $faker->words(2, true);
+                } else if ($taxonomy === 'post_tag') {
+                    $term_name = $faker->word();
+                } else {
+                    $term_name = $faker->words(rand(1, 3), true);
+                }
+            } else {
+                $term_name = 'Term ' . ($created + 1) . ' ' . wp_rand(100, 999);
+            }
+            
+            // Check if term already exists
+            if (in_array($term_name, $existing_terms)) {
+                continue;
+            }
+            
             $term_slug = sanitize_title($term_name . '-' . wp_rand(100, 999));
             
             $term = wp_insert_term($term_name, $taxonomy, [
@@ -332,6 +372,8 @@ class WP_Dummy_Content_Filler {
             
             if (!is_wp_error($term)) {
                 $created_terms[] = $term['term_id'];
+                $existing_terms[] = $term_name;
+                $created++;
                 
                 // Add meta to identify dummy terms
                 add_term_meta($term['term_id'], WP_DUMMY_CONTENT_FILLER_META_KEY, '1');
@@ -341,11 +383,11 @@ class WP_Dummy_Content_Filler {
         return $created_terms;
     }
     
-    private function generate_faker_value($type, $custom_value = '') {
+    private function generate_faker_value($type) {
         $faker = $this->get_faker();
         
         if (!$faker) {
-            return $custom_value ?: '';
+            return '';
         }
         
         switch ($type) {
@@ -392,7 +434,7 @@ class WP_Dummy_Content_Filler {
             case 'company':
                 return $faker->company();
             default:
-                return $custom_value ?: '';
+                return '';
         }
     }
     
@@ -447,9 +489,6 @@ class WP_Dummy_Content_Filler {
     }
     
     private function get_post_meta_keys($post_type = 'post') {
-        global $wpdb;
-        
-        // Get registered meta keys from field plugins
         $meta_keys = [];
         
         // 1. Check for ACF fields
@@ -459,7 +498,9 @@ class WP_Dummy_Content_Filler {
                 $fields = acf_get_fields($field_group['key']);
                 if ($fields) {
                     foreach ($fields as $field) {
-                        $meta_keys[$field['name']] = $field['label'] ?? $field['name'];
+                        if (isset($field['name']) && $field['name']) {
+                            $meta_keys[$field['name']] = $field['label'] ?? $field['name'];
+                        }
                     }
                 }
             }
@@ -470,7 +511,7 @@ class WP_Dummy_Content_Filler {
             $cmb2_boxes = CMB2_Boxes::get_all();
             foreach ($cmb2_boxes as $cmb_id => $cmb) {
                 $object_types = $cmb->prop('object_types');
-                if (in_array($post_type, (array)$object_types)) {
+                if ($object_types && in_array($post_type, (array)$object_types)) {
                     $fields = $cmb->prop('fields');
                     if ($fields) {
                         foreach ($fields as $field) {
@@ -480,24 +521,6 @@ class WP_Dummy_Content_Filler {
                         }
                     }
                 }
-            }
-        }
-        
-        // 3. Get existing meta keys from database (excluding hidden ones)
-        if (empty($meta_keys)) {
-            $db_meta_keys = $wpdb->get_col($wpdb->prepare(
-                "SELECT DISTINCT pm.meta_key
-                FROM {$wpdb->postmeta} pm
-                LEFT JOIN {$wpdb->posts} p ON p.ID = pm.post_id
-                WHERE p.post_type = %s
-                AND pm.meta_key NOT LIKE '\_%'
-                AND pm.meta_key NOT IN ('_edit_lock', '_edit_last')
-                ORDER BY pm.meta_key",
-                $post_type
-            ));
-            
-            foreach ($db_meta_keys as $key) {
-                $meta_keys[$key] = $key;
             }
         }
         
@@ -611,32 +634,14 @@ class WP_Dummy_Content_Filler {
         ob_start();
         ?>
         <div class="post-meta-section">
-            <h3>Post Content</h3>
+            <h3>Post Content Options</h3>
             <table class="form-table">
-                <tr>
-                    <th scope="row">Post Title</th>
-                    <td>
-                        <label>
-                            <input type="checkbox" name="generate_title" value="1" checked disabled>
-                            Auto-generate title
-                        </label>
-                    </td>
-                </tr>
-                <tr>
-                    <th scope="row">Post Content</th>
-                    <td>
-                        <label>
-                            <input type="checkbox" name="generate_content" value="1" checked disabled>
-                            Auto-generate content
-                        </label>
-                    </td>
-                </tr>
                 <tr>
                     <th scope="row">Post Excerpt</th>
                     <td>
                         <label>
-                            <input type="checkbox" name="generate_excerpt" value="1" checked>
-                            Auto-generate excerpt
+                            <input type="checkbox" name="create_excerpt" value="1">
+                            Generate post excerpt
                         </label>
                     </td>
                 </tr>
@@ -653,13 +658,13 @@ class WP_Dummy_Content_Filler {
             
             <?php if (!empty($taxonomies)): ?>
             <h3>Taxonomies</h3>
+            <p class="description">When "Create Terms" is enabled, 10 dummy terms will be automatically created for each taxonomy.</p>
             <table class="widefat">
                 <thead>
                     <tr>
                         <th>Taxonomy</th>
                         <th>Create Terms?</th>
-                        <th>Number of Terms</th>
-                        <th>Assign per Post</th>
+                        <th>Assign Terms per Post</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -676,10 +681,6 @@ class WP_Dummy_Content_Filler {
                                 </select>
                             </td>
                             <td>
-                                <input type="number" name="taxonomies[<?php echo esc_attr($taxonomy_slug); ?>][count]" 
-                                       min="1" max="20" value="3" style="width: 80px;">
-                            </td>
-                            <td>
                                 <input type="number" name="taxonomies[<?php echo esc_attr($taxonomy_slug); ?>][assign]" 
                                        min="1" max="10" value="2" style="width: 80px;">
                             </td>
@@ -691,14 +692,13 @@ class WP_Dummy_Content_Filler {
             
             <?php if (!empty($meta_keys)): ?>
             <h3>Custom Post Meta Fields</h3>
-            <p class="description">Configure how each custom field should be filled:</p>
+            <p class="description">Configure how each custom field should be filled. Only fields from ACF, CMB2, or similar plugins are listed.</p>
             <table class="widefat">
                 <thead>
                     <tr>
                         <th>Field Name</th>
                         <th>Meta Key</th>
                         <th>Faker Data Type</th>
-                        <th>Custom Value</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -721,17 +721,13 @@ class WP_Dummy_Content_Filler {
                                     <?php endforeach; ?>
                                 </select>
                             </td>
-                            <td>
-                                <input type="text" name="post_meta[<?php echo esc_attr($meta_key); ?>][value]" 
-                                       placeholder="Custom value (optional)" style="width: 100%;">
-                            </td>
                         </tr>
                     <?php endforeach; ?>
                 </tbody>
             </table>
             <?php else: ?>
             <h3>Custom Post Meta Fields</h3>
-            <p class="description">No custom fields found for this post type.</p>
+            <p class="description">No custom fields from ACF, CMB2, or similar plugins found for this post type.</p>
             <?php endif; ?>
         </div>
         <?php
