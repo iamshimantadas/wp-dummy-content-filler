@@ -4,7 +4,7 @@
     padding: 20px;
     background: white;
     border: 1px solid #ccd0d4;
-    box-shadow: 0 1px 1px rgba(0,0,0,.04);
+    box-shadow: 0 1px 1px rgba(0, 0, 0, .04);
     border-radius: 4px;
 }
 
@@ -23,34 +23,40 @@
     border-color: #b32d2e !important;
 }
 
-#post-meta-configuration, #user-meta-configuration {
+#post-meta-configuration,
+#user-meta-configuration {
     margin: 20px 0;
 }
 
-#post-meta-configuration table, #user-meta-configuration table {
+#post-meta-configuration table,
+#user-meta-configuration table {
     margin-top: 10px;
     border-collapse: collapse;
 }
 
-#post-meta-configuration th, #user-meta-configuration th {
+#post-meta-configuration th,
+#user-meta-configuration th {
     font-weight: 600;
     background: #f6f7f7;
     padding: 10px;
 }
 
-#post-meta-configuration td, #user-meta-configuration td {
+#post-meta-configuration td,
+#user-meta-configuration td {
     padding: 10px;
     vertical-align: middle;
     border-bottom: 1px solid #f0f0f0;
 }
 
-#post-meta-configuration h3, #user-meta-configuration h3 {
+#post-meta-configuration h3,
+#user-meta-configuration h3 {
     margin-top: 30px;
     padding-bottom: 10px;
     border-bottom: 2px solid #f0f0f0;
 }
 
-#post-meta-configuration h3:first-child, #user-meta-configuration h3:first-child {
+#post-meta-configuration h3:first-child,
+#user-meta-configuration h3:first-child {
     margin-top: 0;
 }
 
@@ -115,7 +121,8 @@ code {
     margin: 5px 0 15px 0;
 }
 
-.widefat th, .widefat td {
+.widefat th,
+.widefat td {
     vertical-align: middle;
 }
 

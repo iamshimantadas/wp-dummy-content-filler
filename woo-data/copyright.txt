@@ -1,0 +1,2 @@
+If you want to access this csv file online, you can checkout this github repo: 
+https://github.com/luminati-io/eCommerce-dataset-samples
