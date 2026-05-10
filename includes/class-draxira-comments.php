@@ -365,10 +365,12 @@ class Draxira_Comments
      */
     private function mc_drax_create_dummy_comment($post_id, $comment_type, $author_ids, $faker)
     {
+        $post = get_post($post_id);
+        $is_product = ($post && $post->post_type === 'product');
+
         // Randomly select an author
         $author_id = !empty($author_ids) ? $author_ids[array_rand($author_ids)] : 0;
 
-        // Get author info if available
         $author_name = '';
         $author_email = '';
 
@@ -380,38 +382,34 @@ class Draxira_Comments
             }
         }
 
-        // Fallback to faker or default values
         if (empty($author_name)) {
-            $author_name = $faker ? $faker->name() : 'Dummy Commenter ' . wp_rand(100, 999);
+            $author_name = $faker ? $faker->name() : 'Dummy Reviewer ' . wp_rand(100, 999);
         }
-
         if (empty($author_email)) {
             $author_email = $faker ? $faker->email() : 'dummy' . wp_rand(100, 999) . '@example.com';
         }
 
-        // Generate comment content
         $comment_content = $this->mc_drax_generate_comment_content($faker);
 
-        // Prepare comment data
         $comment_data = [
-            'comment_post_ID' => $post_id,
-            'comment_author' => $author_name,
+            'comment_post_ID'    => $post_id,
+            'comment_author'     => $author_name,
             'comment_author_email' => $author_email,
             'comment_author_url' => $faker ? $faker->url() : '',
-            'comment_content' => $comment_content,
-            'comment_type' => 'comment',
-            'comment_approved' => 1,
-            'user_id' => $author_id,
-            'comment_date' => current_time('mysql'),
-            'comment_date_gmt' => current_time('mysql', 1),
+            'comment_content'    => $comment_content,
+            'comment_type'       => $is_product ? 'review' : 'comment',
+            'comment_approved'   => 1,
+            'user_id'            => $author_id,
+            'comment_date'       => current_time('mysql'),
+            'comment_date_gmt'   => current_time('mysql', 1),
         ];
 
-        // For reply comments, randomly select a parent comment
-        if ($comment_type === 'reply') {
+        // For reply comments
+        if ($comment_type === 'reply' && !$is_product) {
             $parent_comments = get_comments([
                 'post_id' => $post_id,
-                'number' => 5,
-                'status' => 'approve',
+                'number'  => 5,
+                'status'  => 'approve',
             ]);
 
             if (!empty($parent_comments)) {
@@ -423,13 +421,27 @@ class Draxira_Comments
         $comment_id = wp_insert_comment($comment_data);
 
         if ($comment_id && !is_wp_error($comment_id)) {
-            // Mark as dummy comment
             update_comment_meta($comment_id, DRAXIRA_META_KEY, '1');
+
+            if ($is_product) {
+                $rating = $faker ? $faker->numberBetween(3, 5) : wp_rand(3, 5);
+
+                update_comment_meta($comment_id, 'rating', $rating);
+                update_comment_meta($comment_id, '_wc_product_review', '1');
+                update_comment_meta($comment_id, 'verified', 1);
+
+                // Update product average rating
+                if (function_exists('wc_update_product_lookup_tables')) {
+                    wc_update_product_lookup_tables($post_id);
+                }
+            }
+
             return $comment_id;
         }
 
         return false;
     }
+
 
     /**
      * Generate comment content using faker or fallback

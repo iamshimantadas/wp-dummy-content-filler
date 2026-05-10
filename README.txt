@@ -4,7 +4,7 @@ Tags: dummy content, dummy posts, test data, dummy users, content generator
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.2
-Stable tag: 1.0.2
+Stable tag: 1.0.3
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -136,6 +136,12 @@ Yes! Please visit our [GitHub repository](https://github.com/microcodes/draxira)
 
 == Changelog ==
 
+= 1.0.3 =
+* Enhanced Review System: Significant improvements made to the native product review functionality.
+* Bulk Addition Capability: You can now add a maximum of 40 products simultaneously.
+* Optimized Creation Speed: Product creation workflows are now up to 10x faster than previous benchmarks.
+* New Asset Library: Added a collection of Ancient Indian imagery specifically for product and store design.
+
 = 1.0.2 =
 * Bug fixes
 
@@ -174,6 +180,9 @@ Yes! Please visit our [GitHub repository](https://github.com/microcodes/draxira)
   - Performance optimizations for bulk operations
 
 == Upgrade Notice ==
+
+= 1.0.3 =
+This update focuses on scaling and speed for WooCommerce, highlighted by an optimized product creation engine that is now 10x faster. The system expands utility with a bulk addition tool supporting up to 40 products at once, an enhanced native review system, and a specialized asset library featuring Ancient Indian imagery.
 
 = 1.0.2 = 
 minor bug fixes

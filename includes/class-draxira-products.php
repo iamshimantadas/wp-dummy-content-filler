@@ -225,7 +225,9 @@ class Draxira_Products
             return;
         }
 
-        $headers = str_getcsv(array_shift($lines));
+        // $headers = str_getcsv(array_shift($lines)); before 1.0.3
+        $headers = str_getcsv(array_shift($lines), ',', '"', '\\');
+
         $data = [];
         $variations = [];
 
@@ -233,7 +235,9 @@ class Draxira_Products
             if (empty(trim($line)))
                 continue;
 
-            $row = str_getcsv($line);
+            // $row = str_getcsv($line); before 1.0.3
+            $row = str_getcsv($line, ',', '"', '\\');
+            
             if (count($row) !== count($headers))
                 continue;
 
@@ -1489,10 +1493,10 @@ class Draxira_Products
             </td>
         </tr>
         <tr>
-            <th scope="row"><?php esc_html_e('Number of Products', 'draxira'); ?></th>
+            <th scope="row"> <?php esc_html_e('Number of Products', 'draxira'); ?> </th>
             <td>
-                <input type="number" name="product_count" min="1" max="200" value="5" style="width: 100px;">
-                <p class="description"><?php esc_html_e('Maximum 200 products at a time', 'draxira'); ?></p>
+                <input type="number" name="product_count" min="1" max="40" value="5" style="width: 100px;">
+                <p class="description"> <?php esc_html_e('Maximum 40 products at a time', 'draxira'); ?> </p>
             </td>
         </tr>
         <tr>
